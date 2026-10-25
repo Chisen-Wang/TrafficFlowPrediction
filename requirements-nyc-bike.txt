@@ -1,0 +1,7 @@
+# Optional NYC-Bike data preparation and audit dependencies.
+-r requirements.txt
+pyarrow
+xlrd>=2.0
+pyshp>=2.3
+shapely>=2.0
+# audit_nyc_bike.py also requires the bsdtar executable for official .rar archives.

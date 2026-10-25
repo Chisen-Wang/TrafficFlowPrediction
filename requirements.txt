@@ -1,0 +1,7 @@
+# Python 3.11+ (3.12 used for local verification).
+# Install the PyTorch build appropriate for your CPU/CUDA environment first.
+torch>=2.6,<3
+numpy>=1.26,<3
+pandas>=2.2,<4
+transformers>=4.45,<6
+peft>=0.13,<0.21
