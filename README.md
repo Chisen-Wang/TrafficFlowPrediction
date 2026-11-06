@@ -81,29 +81,101 @@ python train_tfp.py --data pems04 --train_fraction 0.1 --subset_seed 6666
 
 ```bash
 python -m pip install -r requirements-nyc-bike.txt
-python download_nyc_bike.py
+python download_nyc_bike.py --profile training
 python prepare_nyc_bike.py
 bash train_nyc_bike.sh unica
 # 只使用 TFP：bash train_nyc_bike.sh tfp
 ```
 
 NYC 默认过去 24 小时预测未来 24 小时，使用首日已有记录的站点集合。
-下载脚本包含天气、POI、人口等上下文文件，下载量和准备内存需求较大。
+`--profile training` 下载模型使用的完整流量、历史天气、节假日和 2013 年 POI。
+省略此参数或使用 `--profile full` 还会下载预报、AQI、人口和路网等额外审计文件。
+准备过程会展开全部窗口，需要足够的内存。
 完整原始上下文审计另需系统命令 `bsdtar`（Ubuntu/Debian 包名 `libarchive-tools`）：
 
 ```bash
+python download_nyc_bike.py --profile full
 python audit_nyc_bike.py
 ```
 
 审计输出为 `nyc_bike_audit.json`；数据与映射文件保存在忽略上传的 `data/` 内。
 数据来源、时间划分和上下文约定见 [数据协议](docs/DATA_PROTOCOL.md)。
 
+## 便于调参的启动脚本
+
+`run_pems04.sh`、`run_pems08.sh`、`run_nyc_bike.sh` 将常用参数集中在文件顶部，
+自动激活 Conda `dl` 环境；默认启用 TFP + UniCA、FP32、batch size 32、最多 200 轮，
+按验证集 MAE 选优，连续 50 轮无改善时早停，最后重载最佳权重评估完整测试集。
+这些脚本使用已经准备好的数据；修改输入/输出窗口时需要准备对应窗口的数据。
+
+```bash
+bash run_pems04.sh
+bash run_pems08.sh
+bash run_nyc_bike.sh
+```
+
+三条命令可分别运行；需要连续训练三套数据时，等待上一条结束再运行下一条。
+参数优先级为：命令行参数 > 文件内的 `EXTRA_ARGS` > 环境变量 > 文件中的默认值。
+可直接修改文件顶部的 `BATCH_SIZE`、`EPOCHS`、`LRATE`、`DEVICE`、`LLM_LAYER`、
+`U`、`SEED` 等默认值，或在启动时临时覆盖：
+
+```bash
+# 临时修改参数
+bash run_pems04.sh --batch_size 16 --epochs 100 --lrate 0.0005
+BATCH_SIZE=16 EPOCHS=100 LRATE=0.0005 bash run_pems08.sh
+
+# 切换到只用 TFP，或调整 0 / 1 开关
+MODE=tfp bash run_pems04.sh
+UNICA_WITH_GATE=0 SHUFFLE_TRAIN=0 bash run_nyc_bike.sh
+
+# 查看最终命令，不激活环境或启动训练
+bash run_nyc_bike.sh --dry-run --batch_size 16
+
+# 先做短程功能检查
+bash run_nyc_bike.sh --epochs 1 --max_train_batches 5 --max_eval_batches 2
+
+# 只训练适配器，权重需匹配数据集和模型结构
+MODE=adapter_only PRETRAINED_PATH=logs/YOUR_TFP_RUN/best_model.pth bash run_pems08.sh
+```
+
+PEMS 默认不开启每轮打乱、UniCA 门控，UniCA 使用 8 个头；NYC 默认开启打乱和门控，
+UniCA 使用 4 个头，沿用已经验证的配置。`EXTRA_ARGS=(...)` 可添加其他训练参数。
+`OFFLINE=1` 沿用本机已缓存的 GPT-2；需要联网下载权重时设为 `OFFLINE=0`。
+Conda 不在 `~/miniconda3` 时，可设置 `CONDA_SH=/实际路径/etc/profile.d/conda.sh`，
+也可预先激活 `dl`；`CONDA_ENV` 可指定其他环境。
+每次运行自动生成独立的 `logs/时间戳-模式-数据集/` 目录。
+可用 `--save ./logs/my-run-` 或 `SAVE_PREFIX=./logs/my-run-` 自定义目录前缀，
+训练入口会追加数据集名。
+
 ## 模型与训练协议
 
 每个节点对应一个 GPT-2 token，时间投影、日历嵌入和节点嵌入构成输入。
 前 `llm_layer - U` 层使用 GPT-2 因果注意力，末尾 `U` 层使用图注意力。
+默认 `llm_layer=2`、`U=2`：两层都使用图注意力，没有因果注意力层。
 TimeFilter 路由物理图、动态相似度与剩余边；UniCA 可融合历史、静态及已知未来协变量。
 模型输出为 `[batch, output_len, num_nodes, 1]`。
+
+TimeFilter 默认对每个节点的隐藏状态做无仿射参数的 LayerNorm，再投影 Q/K 计算动态相似度，
+以控制图偏置的数值尺度。`--no-tfp_input_norm` 可恢复旧的计算方式。
+UniCA 默认内部宽度为 128，变量投影、变量选择、门控与未来注意力均在该空间计算；
+节点表示经 768→128 投影进入适配器，残差经 128→768 无偏置投影返回主干。
+启用门控时，门控的零初始化仍使适配器初始为恒等残差。
+
+`--unica_bottleneck_dim 64` 可进一步缩小；宽度须能被 `--unica_heads` 整除。
+设置为 `768` 时使用旧的完整宽度及权重布局。新训练默认启用两项优化；可独立做消融：
+
+```bash
+# 只保留 TimeFilter 输入归一化，使用原宽度 UniCA
+bash run_nyc_bike.sh --unica_bottleneck_dim 768
+# 只缩小 UniCA，关闭 TimeFilter 输入归一化
+bash run_nyc_bike.sh --no-tfp_input_norm
+# 恢复旧结构和旧 TimeFilter 计算（旧权重也须按此配置构建模型）
+bash run_nyc_bike.sh --no-tfp_input_norm --unica_bottleneck_dim 768
+```
+
+这三个启动脚本也支持环境变量 `TFP_INPUT_NORM=0|1`、`UNICA_BOTTLENECK_DIM=128`。
+两项设置会写入 `run_config.json`。旧的完整 UniCA 权重不能直接装入 128 维适配器；
+优化后的结构需要重新训练。已有数据窗口、协变量与归一化统计无需重建。
 
 - 默认使用验证集 MAE 选优和早停，训练结束重载最佳权重后评估测试集。
 - 保留 `--model_selection_split train|val|test` 供显式实验使用；选择 `test` 会让测试集参与模型选择，不能当作独立测试结果。
@@ -146,6 +218,10 @@ docs/                      数据协议、整理说明和验证记录
 train_tfp.py               统一训练入口
 train_pems.sh              PEMS 三种训练模式
 train_nyc_bike.sh          NYC-Bike 启动脚本
+run_pems04.sh              PEMS04 可调参启动脚本
+run_pems08.sh              PEMS08 可调参启动脚本
+run_nyc_bike.sh            NYC-Bike 可调参启动脚本
+scripts/                  启动脚本共用逻辑
 prepare_*.py               数据准备入口
 download_*.py              数据下载工具
 audit_nyc_bike.py          NYC 原始上下文和准备结果审计

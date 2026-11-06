@@ -5,6 +5,7 @@
 /outputs/
 /checkpoints/
 /results/
+/ccfa-workfiles/
 *.pt
 *.pth
 *.ckpt

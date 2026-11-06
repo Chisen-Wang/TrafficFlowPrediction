@@ -18,7 +18,7 @@ def main():
             prefix = str(suite / f"{mode}-")
             command = [sys.executable, "-B", "tests/smoke_training.py", "--data", dataset,
                        "--data_dir", f"data/{dataset}_12_12", "--input_len", "12", "--output_len", "12",
-                       "--llm_layer", "6", "--U", "1", "--device", "cuda:0", "--batch_size", "1",
+                       "--llm_layer", "2", "--U", "2", "--device", "cuda:0", "--batch_size", "1",
                        "--epochs", "1", "--max_train_batches", "2", "--max_eval_batches", "1", "--save", prefix]
             if mode != "tfp":
                 command += ["--unica_enabled"]

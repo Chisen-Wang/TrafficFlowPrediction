@@ -87,6 +87,7 @@ class TimeFilterAttentionBias(nn.Module):
         top_p: float = 0.5,
         static_weight: float = 1.0,
         dynamic_weight: float = 1.0,
+        input_norm: bool = True,
     ):
         super().__init__()
         if hidden_dim % num_heads != 0:
@@ -102,6 +103,13 @@ class TimeFilterAttentionBias(nn.Module):
         self.static_weight = static_weight
         self.dynamic_weight = dynamic_weight
 
+        # GPT graph attention normalizes its input before Q/K projection. Use
+        # the same per-node normalization here so residual-stream magnitude
+        # cannot overwhelm the content scores with an unbounded graph bias.
+        # No affine parameters: legacy checkpoint keys remain unchanged.
+        self.input_norm = (nn.LayerNorm(hidden_dim, elementwise_affine=False)
+                           if input_norm else nn.Identity())
+
         self.proj_q = nn.Linear(hidden_dim, hidden_dim)
         self.proj_k = nn.Linear(hidden_dim, hidden_dim)
         self.router = TimeFilterMoERouter(num_nodes=num_nodes, top_p=top_p)
@@ -114,6 +122,7 @@ class TimeFilterAttentionBias(nn.Module):
         return x.permute(0, 2, 1, 3).contiguous()
 
     def _dynamic_similarity(self, node_tokens: torch.Tensor) -> torch.Tensor:
+        node_tokens = self.input_norm(node_tokens)
         query = self._split_heads(self.proj_q(node_tokens))
         key = self._split_heads(self.proj_k(node_tokens))
         sim = torch.matmul(query, key.transpose(-1, -2)) / math.sqrt(self.head_dim)

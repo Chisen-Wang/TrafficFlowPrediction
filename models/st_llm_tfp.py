@@ -100,6 +100,7 @@ class TimeFilteredPFA(nn.Module):
                 top_p=float(self.tfp_config.get("top_p", 0.5)),
                 static_weight=float(self.tfp_config.get("static_weight", 1.0)),
                 dynamic_weight=float(self.tfp_config.get("dynamic_weight", 1.0)),
+                input_norm=bool(self.tfp_config.get("input_norm", True)),
             )
 
         self.dropout = nn.Dropout(dropout_rate)
@@ -234,12 +235,20 @@ class TimeFilteredPFA(nn.Module):
         moe_loss = torch.zeros((), device=device, dtype=hidden_states.dtype)
         graph_layer_count = 0
         graph_start = self.gpt_layers - self.U
+        # We call GPT2Block directly, bypassing GPT2Model's mask preparation.
+        # Recent Transformers versions no longer create this mask in attention.
+        causal_mask = torch.full(
+            (input_shape[-1], input_shape[-1]),
+            torch.finfo(hidden_states.dtype).min,
+            dtype=hidden_states.dtype,
+            device=device,
+        ).triu(diagonal=1)[None, None, :, :]
 
         for layer_index, block in enumerate(self.transformer.h):
             if layer_index < graph_start:
                 outputs = block(
                     hidden_states,
-                    attention_mask=None,
+                    attention_mask=causal_mask,
                     head_mask=None,
                     use_cache=False,
                     output_attentions=output_attentions,
@@ -353,6 +362,7 @@ class ST_LLM_TFP(nn.Module):
                 dropout=float(self.unica_config.get("dropout", self.dropout_rate)),
                 with_gate=bool(self.unica_config.get("with_gate", False)),
                 with_future=self.unica_with_future,
+                bottleneck_dim=int(self.unica_config.get("bottleneck_dim", 128)),
             )
 
     def param_num(self) -> int:

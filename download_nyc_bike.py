@@ -29,6 +29,13 @@ PATHS = [
 ] + [
     f"Data/Road_Network/roadNYC{y}.rar" for y in range(2013, 2018)
 ]
+TRAINING_PATHS = [
+    "README.md",
+    "Data/Traffic_Data/Bike_NYC.zip",
+    "Data/Historical_Weather/NYC_20130701_20170930_HistoricalWeather.csv",
+    "Data/Holiday/Holiday_NYC_2013-2023.csv",
+    "Data/POI/POI_NYC-2013.xls",
+]
 
 
 def download(root, relative):
@@ -60,19 +67,27 @@ def download(root, relative):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=Path("data/nyc_bike/raw"))
+    parser.add_argument("--profile", choices=("full", "training"), default="full",
+                        help="full includes optional audit inputs; training downloads all model inputs only")
     args = parser.parse_args()
     manifest_path = args.output_dir / "download_manifest.json"
     previous = json.loads(manifest_path.read_text()) if manifest_path.exists() else None
     if previous is not None and previous["commit"] != COMMIT:
         raise ValueError("Output directory belongs to another upstream commit")
+    paths = TRAINING_PATHS if args.profile == "training" else PATHS
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        records = list(pool.map(lambda path: download(args.output_dir, path), PATHS))
+        records = list(pool.map(lambda path: download(args.output_dir, path), paths))
     if previous is not None:
         hashes = {r["path"]: r["sha256"] for r in previous["files"]}
         for record in records:
             if record["path"] in hashes and record["sha256"] != hashes[record["path"]]:
                 raise ValueError("Cached file checksum changed: " + record["path"])
-    manifest = dict(repository="https://github.com/Liyue-Chen/STContext", commit=COMMIT, files=records)
+        # Switching to the smaller profile must retain existing provenance.
+        merged = {record["path"]: record for record in previous["files"]}
+        merged.update({record["path"]: record for record in records})
+        records = list(merged.values())
+    manifest = dict(repository="https://github.com/Liyue-Chen/STContext", commit=COMMIT,
+                    profile=args.profile, files=records)
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
 
 

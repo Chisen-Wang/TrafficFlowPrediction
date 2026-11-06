@@ -38,8 +38,8 @@ def parse_args(argv=None):
     parser.add_argument("--num_nodes", type=int, default=None)
     parser.add_argument("--input_len", type=int, default=None)
     parser.add_argument("--output_len", type=int, default=None)
-    parser.add_argument("--llm_layer", type=int, default=6)
-    parser.add_argument("--U", type=int, default=1)
+    parser.add_argument("--llm_layer", type=int, default=2)
+    parser.add_argument("--U", type=int, default=2)
     parser.add_argument("--wdecay", type=float, default=0.0001)
     parser.add_argument("--clip", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=6666)
@@ -60,6 +60,8 @@ def parse_args(argv=None):
     parser.add_argument("--tfp_static_weight", type=float, default=1.0)
     parser.add_argument("--tfp_dynamic_weight", type=float, default=1.0)
     parser.add_argument("--tfp_moe_loss_weight", type=float, default=0.05)
+    parser.add_argument("--tfp_input_norm", action=argparse.BooleanOptionalAction, default=True,
+                        help="Layer-normalize node tokens before TimeFilter similarity projection")
 
     parser.add_argument("--unica_enabled", action="store_true")
     parser.add_argument("--unica_covariates", type=str, default=None)
@@ -69,6 +71,8 @@ def parse_args(argv=None):
     parser.add_argument("--unica_future_pos", type=str, default="post", choices=["pre", "post"])
     parser.add_argument("--unica_heads", type=int, default=8)
     parser.add_argument("--unica_dropout", type=float, default=0.1)
+    parser.add_argument("--unica_bottleneck_dim", type=int, default=128,
+                        help="Internal UniCA width; use 768 for the legacy full-width adapter")
     parser.add_argument("--unica_past_dynamic_dim", type=int, default=None)
     parser.add_argument("--unica_future_dynamic_dim", type=int, default=None)
     parser.add_argument("--unica_static_dim", type=int, default=None)
@@ -115,6 +119,10 @@ def parse_args(argv=None):
             parser.error(f"--{key} must be positive")
     if args.unica_enabled and args.unica_training_policy == "adapter_only" and not args.unica_pretrained_path:
         parser.error("--unica_pretrained_path is required for adapter_only training")
+    if args.unica_enabled and (not 1 <= args.unica_bottleneck_dim <= 768
+                              or args.unica_heads < 1
+                              or args.unica_bottleneck_dim % args.unica_heads):
+        parser.error("--unica_bottleneck_dim must be in [1, 768] and divisible by positive --unica_heads")
     return args
 
 
@@ -143,6 +151,7 @@ class Trainer:
             "top_p": args.tfp_top_p,
             "static_weight": args.tfp_static_weight,
             "dynamic_weight": args.tfp_dynamic_weight,
+            "input_norm": args.tfp_input_norm,
         }
         unica_config = {
             "past_pos": args.unica_past_pos,
@@ -154,6 +163,7 @@ class Trainer:
             "past_dynamic_dim": args.unica_past_dynamic_dim,
             "future_dynamic_dim": args.unica_future_dynamic_dim,
             "static_dim": args.unica_static_dim,
+            "bottleneck_dim": args.unica_bottleneck_dim,
         }
         self.model = ST_LLM_TFP(
             device=str(device),
@@ -188,7 +198,9 @@ class Trainer:
                           for name, value in checkpoint.items()
                           if name in current_state and value.shape != current_state[name].shape]
             if mismatches:
-                raise ValueError("Checkpoint shape mismatch; use the same dataset and window: " + "; ".join(mismatches[:5]))
+                raise ValueError("Checkpoint shape mismatch; match dataset, window and UniCA width "
+                                 "(--unica_bottleneck_dim 768 for a legacy UniCA checkpoint): "
+                                 + "; ".join(mismatches[:5]))
             if "gpt.static_adj" in checkpoint and not torch.equal(checkpoint["gpt.static_adj"], current_state["gpt.static_adj"]):
                 raise ValueError("Checkpoint adjacency differs from this dataset; use its matching TFP checkpoint")
             missing, unexpected = self.model.load_state_dict(checkpoint, strict=False)

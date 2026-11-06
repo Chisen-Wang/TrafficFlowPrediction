@@ -31,3 +31,7 @@ jobs:
         run: |
           bash -n train_pems.sh
           bash -n train_nyc_bike.sh
+          bash -n run_pems04.sh
+          bash -n run_pems08.sh
+          bash -n run_nyc_bike.sh
+          bash -n scripts/run_training_common.sh

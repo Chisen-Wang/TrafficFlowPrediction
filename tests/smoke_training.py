@@ -24,6 +24,17 @@ def main():
     def checked_init(self, scaler, adj_mx, args, device):
         original_init(self, scaler, adj_mx, args, device)
         captured.update(engine=self, args=args)
+        if args.tfp_enabled:
+            assert isinstance(self.model.gpt.tfp_bias.input_norm, torch.nn.LayerNorm) == args.tfp_input_norm
+            evidence["tfp_input_norm"] = args.tfp_input_norm
+        if args.unica_enabled:
+            assert self.model.unica_adapter is not None, "UniCA was not constructed"
+            assert self.model.unica_adapter.bottleneck_dim == args.unica_bottleneck_dim
+            evidence["unica_bottleneck_dim"] = self.model.unica_adapter.bottleneck_dim
+            evidence["adapter_parameters"] = sum(p.numel() for p in self.model.unica_adapter.parameters())
+            captured["initial_adapter"] = {
+                k: v.detach().cpu().clone() for k, v in self.model.unica_adapter.state_dict().items()
+            }
         if args.unica_enabled and args.unica_training_policy == "adapter_only":
             captured["initial_state"] = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
             assert all(p.requires_grad == name.startswith("unica_adapter.")
@@ -68,6 +79,13 @@ def main():
         assert changed and all(k.startswith("unica_adapter.") for k in changed), changed
         evidence["adapter_only_changed_tensors"] = len(changed)
         evidence["backbone_unchanged"] = True
+    if "initial_adapter" in captured:
+        changed = [k for k, v in engine.model.unica_adapter.state_dict().items()
+                   if not torch.equal(v.cpu(), captured["initial_adapter"][k])]
+        assert changed, "UniCA adapter did not update"
+        evidence["adapter_changed_tensors"] = len(changed)
+    evidence["unica_enabled"] = args.unica_enabled
+    evidence["unica_training_policy"] = args.unica_training_policy if args.unica_enabled else None
     evidence["dataset"] = args.data
     evidence["past_dynamic_dim"] = args.unica_past_dynamic_dim
     evidence["checkpoint_reloaded"] = True

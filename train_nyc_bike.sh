@@ -13,6 +13,6 @@ esac
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export PYTHONUNBUFFERED=1
 exec python -B train_tfp.py --data nyc_bike --input_len 24 --output_len 24 \
-  --steps_per_day 24 --batch_size 4 --llm_layer 6 --U 1 \
+  --steps_per_day 24 --batch_size 4 --llm_layer 2 --U 2 \
   --epochs 200 --es_patience 50 --model_selection_split val --shuffle_train \
   --save "./logs/$(date +%Y-%m-%d-%H-%M-%S)-nyc-${mode}-" "${extra[@]}" "$@"

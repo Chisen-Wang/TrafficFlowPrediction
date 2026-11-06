@@ -280,7 +280,7 @@ def prepare(raw_dir, output_dir, train_end="2016-01-01", val_end="2017-01-01",
             "2013 POI snapshot is treated as fixed geography; exact snapshot publication date is unavailable.",
             "Forecast has no issue_time/lead_time; excluded from future covariates.",
             "AQI only overlaps 2017 and has no training coverage; excluded from primary covariates.",
-            "Road/demographic/administrative archives downloaded and audited, not silently synthesized as station features.",
+            "Road/demographic/administrative contexts are excluded from model features; full download and context audit are separate steps.",
         ])
     write_json(output_dir / "metadata.json", metadata)
     write_json(output_dir / "source_manifest.json", manifest)

@@ -140,6 +140,7 @@ class PEMSUniCACovariateAdapter(nn.Module):
         dropout: float = 0.1,
         with_gate: bool = False,
         with_future: bool = True,
+        bottleneck_dim: Optional[int] = None,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -152,30 +153,45 @@ class PEMSUniCACovariateAdapter(nn.Module):
         self.with_gate = with_gate
         self.with_future = with_future
 
+        # All covariate processing uses a compact space. The residual interface
+        # retains hidden_dim, so the GPT backbone and prediction head are intact.
+        width = min(hidden_dim, 128) if bottleneck_dim is None else bottleneck_dim
+        if not 1 <= width <= hidden_dim:
+            raise ValueError("bottleneck_dim must be in [1, hidden_dim].")
+        if num_heads < 1 or width % num_heads:
+            raise ValueError("bottleneck_dim must be divisible by num_heads.")
+        self.bottleneck_dim = width
+        self.node_projection = (nn.Linear(hidden_dim, width)
+                                if width != hidden_dim else nn.Identity())
+        # A zero-initialized gate must give an exact identity residual, including
+        # after projection back to the backbone width.
+        self.output_projection = (nn.Linear(width, hidden_dim, bias=False)
+                                  if width != hidden_dim else nn.Identity())
+
         self.past_projectors = nn.ModuleList(
-            [nn.Linear(input_len, hidden_dim) for _ in range(past_dynamic_dim)]
+            [nn.Linear(input_len, width) for _ in range(past_dynamic_dim)]
         )
         self.future_projectors = nn.ModuleList(
-            [nn.Linear(output_len, hidden_dim) for _ in range(future_dynamic_dim)]
+            [nn.Linear(output_len, width) for _ in range(future_dynamic_dim)]
         )
         self.static_projectors = nn.ModuleList(
-            [nn.Linear(1, hidden_dim) for _ in range(static_dim)]
+            [nn.Linear(1, width) for _ in range(static_dim)]
         )
 
         self.static_selector = VariableSelectionNetwork(
-            d_hidden=hidden_dim,
+            d_hidden=width,
             num_vars=max(static_dim, 1),
             dropout=dropout,
         )
-        self.static_context = GatedResidualNetwork(d_hidden=hidden_dim, dropout=dropout)
+        self.static_context = GatedResidualNetwork(d_hidden=width, dropout=dropout)
         self.past_selector = VariableSelectionNetwork(
-            d_hidden=hidden_dim,
+            d_hidden=width,
             num_vars=1 + past_dynamic_dim,
             dropout=dropout,
             add_static=True,
         )
         self.future_selector = VariableSelectionNetwork(
-            d_hidden=hidden_dim,
+            d_hidden=width,
             num_vars=max(future_dynamic_dim, 1),
             dropout=dropout,
             add_static=True,
@@ -183,24 +199,24 @@ class PEMSUniCACovariateAdapter(nn.Module):
 
         if with_gate:
             self.past_gate = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 2),
-                ParameterizedGatedLinearUnit(hidden_dim, nonlinear=False),
+                nn.Linear(width, width * 2),
+                ParameterizedGatedLinearUnit(width, nonlinear=False),
             )
             self.future_gate = nn.Sequential(
-                nn.Linear(hidden_dim, hidden_dim * 2),
-                ParameterizedGatedLinearUnit(hidden_dim, nonlinear=False),
+                nn.Linear(width, width * 2),
+                ParameterizedGatedLinearUnit(width, nonlinear=False),
             )
         else:
             self.past_gate = None
             self.future_gate = None
 
         self.future_attention = nn.MultiheadAttention(
-            embed_dim=hidden_dim,
+            embed_dim=width,
             num_heads=num_heads,
             dropout=dropout,
             batch_first=True,
         )
-        self.past_future_indicator = nn.Parameter(torch.randn(1, 2, hidden_dim) * 0.02)
+        self.past_future_indicator = nn.Parameter(torch.randn(1, 2, width) * 0.02)
         self.dropout = nn.Dropout(dropout)
 
     def _expand_nodes(self, x: torch.Tensor) -> torch.Tensor:
@@ -292,13 +308,13 @@ class PEMSUniCACovariateAdapter(nn.Module):
         past_tokens, past_mask = self._past_tokens(covariates, node_tokens.device)
         target_mask = torch.ones(batch_size, num_nodes, 1, device=node_tokens.device, dtype=torch.bool)
         selected, _ = self.past_selector(
-            [node_tokens] + past_tokens,
+            [self.node_projection(node_tokens)] + past_tokens,
             static=static,
             mask=torch.cat([target_mask, past_mask], dim=-1),
         )
         if self.past_gate is not None:
             selected = self.past_gate(selected)
-        return node_tokens + self.dropout(selected)
+        return node_tokens + self.dropout(self.output_projection(selected))
 
     def fuse_future(self, node_tokens: torch.Tensor, covariates: Dict[str, torch.Tensor]) -> torch.Tensor:
         if not self.with_future:
@@ -309,14 +325,14 @@ class PEMSUniCACovariateAdapter(nn.Module):
         static = self._static_tokens(covariates, batch_size, node_tokens.device)
         future_tokens, future_mask = self._future_tokens(covariates, node_tokens.device)
         selected, _ = self.future_selector(future_tokens, static=static, mask=future_mask)
-        past_tokens = node_tokens + self.past_future_indicator[:, 0:1, :]
+        past_tokens = self.node_projection(node_tokens) + self.past_future_indicator[:, 0:1, :]
         known_future = selected + self.past_future_indicator[:, 1:2, :]
         fused = torch.cat([past_tokens, known_future], dim=1)
         fused = self.future_attention(fused, fused, fused, need_weights=False)[0]
         future_context = fused[:, :num_nodes, :]
         if self.future_gate is not None:
             future_context = self.future_gate(future_context)
-        return node_tokens + self.dropout(future_context)
+        return node_tokens + self.dropout(self.output_projection(future_context))
 
 
 # Import compatibility; class renaming does not change state_dict keys.
