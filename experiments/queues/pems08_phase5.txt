@@ -1,0 +1,5 @@
+# Phase 5: temporal encoder (p4-temp2, 14.0747) combined with node MLP blocks and stronger regularization.
+p5-t2-emb4 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 2 --embed_layers 4
+p5-t2-wd1e3 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 2 --wdecay 0.001
+p5-t2-emb4-drop2 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 2 --embed_layers 4 --dropout 0.2
+p5-t2-bs16 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 2 --batch_size 16

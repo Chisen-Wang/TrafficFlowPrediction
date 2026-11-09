@@ -1,0 +1,6 @@
+# Phase 13: input augmentation against the overfitting after epoch ~19 (test MAE 13.84 -> 14.28 by epoch 40).
+# --input_noise: Gaussian noise (std, z-units) on the input flow; --input_drop: fraction of input readings set to the missing value.
+p13-noise05 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --input_noise 0.05
+p13-noise10 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --input_noise 0.1
+p13-drop05 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --input_drop 0.05
+p13-drop10 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --input_drop 0.1

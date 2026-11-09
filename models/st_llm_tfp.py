@@ -37,6 +37,50 @@ class TemporalEmbedding(nn.Module):
         return time_day + time_week
 
 
+class StepTemporalEncoder(nn.Module):
+    """STAEformer-style per-step encoder: each of the input steps becomes a token
+    (flow + time-of-day + day-of-week + adaptive spatio-temporal embedding), a few
+    transformer layers attend over time per node, and the tokens are flattened to
+    one vector per node."""
+
+    def __init__(self, time: int, num_nodes: int, input_len: int, out_dim: int, num_layers: int,
+                 dropout: float, feat_dim: int = 24, adaptive_dim: int = 80, heads: int = 4, ff_dim: int = 256):
+        super().__init__()
+        self.time = time
+        model_dim = 3 * feat_dim + adaptive_dim
+        self.flow_proj = nn.Linear(1, feat_dim)
+        self.tod_emb = nn.Embedding(time, feat_dim)
+        self.dow_emb = nn.Embedding(7, feat_dim)
+        self.adaptive = nn.Parameter(torch.empty(input_len, num_nodes, adaptive_dim))
+        nn.init.xavier_uniform_(self.adaptive)
+        self.layers = nn.ModuleList(
+            nn.TransformerEncoderLayer(model_dim, heads, ff_dim, dropout, batch_first=True)
+            for _ in range(num_layers)
+        )
+        self.out_proj = nn.Linear(input_len * model_dim, out_dim)
+        self.flat_dim = input_len * model_dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, T, N, 3] -> [B, out_dim, N, 1]
+        batch_size, steps, num_nodes, _ = x.shape
+        tod = (x[..., 1] * self.time).long().clamp(0, self.time - 1)
+        dow = x[..., 2].long().clamp(0, 6)
+        h = torch.cat(
+            [
+                self.flow_proj(x[..., :1]),
+                self.tod_emb(tod),
+                self.dow_emb(dow),
+                self.adaptive.unsqueeze(0).expand(batch_size, -1, -1, -1),
+            ],
+            dim=-1,
+        )
+        h = h.transpose(1, 2).reshape(batch_size * num_nodes, steps, -1)
+        for layer in self.layers:
+            h = layer(h)
+        flat = h.reshape(batch_size, num_nodes, -1)
+        return self.out_proj(flat).transpose(1, 2).unsqueeze(-1), flat
+
+
 class TimeFilteredPFA(nn.Module):
     """Partially frozen GPT-2 with TimeFilter-enhanced graph attention in last U layers."""
 
@@ -49,6 +93,7 @@ class TimeFilteredPFA(nn.Module):
         dropout_rate: float = 0.1,
         tfp_enabled: bool = True,
         tfp_config: Optional[Dict] = None,
+        lora_only: bool = False,
     ):
         super().__init__()
         if U < 1 or U > gpt_layers:
@@ -58,6 +103,7 @@ class TimeFilteredPFA(nn.Module):
         self.gpt_layers = gpt_layers
         self.U = U
         self.dropout_rate = dropout_rate
+        self.lora_only = lora_only
         self.tfp_enabled = tfp_enabled
         self.tfp_config = tfp_config or {}
         self.last_attention_bias_shape: Optional[Tuple[int, ...]] = None
@@ -101,6 +147,7 @@ class TimeFilteredPFA(nn.Module):
                 static_weight=float(self.tfp_config.get("static_weight", 1.0)),
                 dynamic_weight=float(self.tfp_config.get("dynamic_weight", 1.0)),
                 input_norm=bool(self.tfp_config.get("input_norm", True)),
+                proj_dim=self.tfp_config.get("proj_dim"),
             )
 
         self.dropout = nn.Dropout(dropout_rate)
@@ -120,7 +167,7 @@ class TimeFilteredPFA(nn.Module):
                 if "ln" in name:
                     param.requires_grad = True
                 elif layer_index >= graph_start and "mlp" not in name:
-                    param.requires_grad = True
+                    param.requires_grad = not self.lora_only or "lora_" in name
 
         for param in self.transformer.ln_f.parameters():
             param.requires_grad = True
@@ -298,8 +345,21 @@ class ST_LLM_TFP(nn.Module):
         unica_enabled: bool = False,
         unica_config: Optional[Dict] = None,
         steps_per_day: Optional[int] = None,
+        lora_only: bool = False,
+        level_prior: str = "none",
+        dropout: float = 0.1,
+        head_hidden: int = 0,
+        input_skip: bool = False,
+        embed_layers: int = 0,
+        temporal_layers: int = -1,
+        temporal_skip: bool = False,
     ):
         super().__init__()
+        if level_prior not in {"none", "covariate", "residual"}:
+            raise ValueError("level_prior must be 'none', 'covariate' or 'residual'")
+        if level_prior != "none" and not unica_enabled:
+            raise ValueError("level_prior needs the UniCA adapter")
+        self.level_prior = level_prior
         self.device_name = device
         self.input_dim = input_dim
         self.num_nodes = num_nodes
@@ -311,7 +371,9 @@ class ST_LLM_TFP(nn.Module):
         self.tfp_config = tfp_config or {}
         self.unica_enabled = unica_enabled
         self.unica_config = unica_config or {}
-        self.dropout_rate = 0.1
+        self.dropout_rate = dropout
+        if not 0.0 <= dropout < 1.0 or head_hidden < 0:
+            raise ValueError("dropout must be in [0, 1) and head_hidden non-negative")
 
         time = steps_per_day if steps_per_day is not None else (48 if num_nodes in {250, 266} else 288)
         if time <= 0:
@@ -323,14 +385,59 @@ class ST_LLM_TFP(nn.Module):
 
         gpt_channel = 256
         to_gpt_channel = 768
-        self.start_conv = nn.Conv2d(self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1))
+        # temporal_layers < 0 keeps the original flattening 1x1 conv; >= 0 uses the per-step encoder.
+        self.temporal_encoder = None
+        if temporal_layers >= 0:
+            self.temporal_encoder = StepTemporalEncoder(
+                time, num_nodes, input_len, gpt_channel, temporal_layers, self.dropout_rate
+            )
+        else:
+            self.start_conv = nn.Conv2d(self.input_dim * self.input_len, gpt_channel, kernel_size=(1, 1))
+        self.temporal_head = None
+        if temporal_skip:
+            if self.temporal_encoder is None:
+                raise ValueError("temporal_skip needs temporal_layers >= 0")
+            # STAEformer-style direct output from the time tokens; zero start keeps the initial model unchanged.
+            self.temporal_head = nn.Linear(self.temporal_encoder.flat_dim, output_len)
+            nn.init.zeros_(self.temporal_head.weight)
+            nn.init.zeros_(self.temporal_head.bias)
         self.Temb = TemporalEmbedding(time, gpt_channel)
         self.node_emb = nn.Parameter(torch.empty(self.num_nodes, gpt_channel))
         nn.init.xavier_uniform_(self.node_emb)
 
         self.in_layer = nn.Conv2d(gpt_channel * 3, to_gpt_channel, kernel_size=(1, 1))
         self.dropout = nn.Dropout(p=self.dropout_rate)
-        self.regression_layer = nn.Conv2d(to_gpt_channel, self.output_len, kernel_size=(1, 1))
+        # Optional STID-style residual MLP blocks on each node token before GPT-2 (whose MLPs stay frozen).
+        self.embed_blocks = nn.ModuleList(
+            nn.Sequential(
+                nn.Conv2d(to_gpt_channel, to_gpt_channel, kernel_size=(1, 1)),
+                nn.ReLU(),
+                nn.Dropout(self.dropout_rate),
+                nn.Conv2d(to_gpt_channel, to_gpt_channel, kernel_size=(1, 1)),
+            )
+            for _ in range(embed_layers)
+        )
+        if head_hidden:
+            # Optional two-layer head; head_hidden=0 keeps the original linear head and its checkpoint keys.
+            self.regression_layer = nn.Sequential(
+                nn.Conv2d(to_gpt_channel, head_hidden, kernel_size=(1, 1)),
+                nn.GELU(),
+                nn.Dropout(self.dropout_rate),
+                nn.Conv2d(head_hidden, self.output_len, kernel_size=(1, 1)),
+            )
+        else:
+            self.regression_layer = nn.Conv2d(to_gpt_channel, self.output_len, kernel_size=(1, 1))
+        self.input_skip = None
+        if input_skip:
+            # Zero start: the model begins identical to the one without the shortcut.
+            self.input_skip = nn.Linear(self.input_len, self.output_len)
+            nn.init.zeros_(self.input_skip.weight)
+            nn.init.zeros_(self.input_skip.bias)
+        if level_prior == "residual":
+            # Training starts from the prior itself and learns only its error.
+            last = self.regression_layer[-1] if head_hidden else self.regression_layer
+            nn.init.zeros_(last.weight)
+            nn.init.zeros_(last.bias)
         self.gpt = TimeFilteredPFA(
             adj_mx=adj_mx,
             device=device,
@@ -339,6 +446,7 @@ class ST_LLM_TFP(nn.Module):
             dropout_rate=self.dropout_rate,
             tfp_enabled=self.tfp_enabled,
             tfp_config=self.tfp_config,
+            lora_only=lora_only,
         )
 
         self.unica_adapter = None
@@ -356,7 +464,8 @@ class ST_LLM_TFP(nn.Module):
                 output_len=self.output_len,
                 num_nodes=self.num_nodes,
                 past_dynamic_dim=int(self.unica_config.get("past_dynamic_dim", 2)),
-                future_dynamic_dim=int(self.unica_config.get("future_dynamic_dim", 4)),
+                # The level prior adds two per-node future variables: profile and ratio.
+                future_dynamic_dim=int(self.unica_config.get("future_dynamic_dim", 4)) + (2 if level_prior != "none" else 0),
                 static_dim=int(self.unica_config.get("static_dim", 3)),
                 num_heads=int(self.unica_config.get("num_heads", 1)),
                 dropout=float(self.unica_config.get("dropout", self.dropout_rate)),
@@ -398,12 +507,17 @@ class ST_LLM_TFP(nn.Module):
         tem_emb = self.Temb(data)
         node_emb = self.node_emb.unsqueeze(0).expand(batch_size, -1, -1).transpose(1, 2).unsqueeze(-1)
 
-        input_data = data.permute(0, 3, 2, 1).transpose(1, 2).contiguous()
-        input_data = input_data.view(batch_size, num_nodes, -1).transpose(1, 2).unsqueeze(-1)
-        input_data = self.start_conv(input_data)
+        if self.temporal_encoder is not None:
+            input_data, temporal_flat = self.temporal_encoder(data)
+        else:
+            input_data = data.permute(0, 3, 2, 1).transpose(1, 2).contiguous()
+            input_data = input_data.view(batch_size, num_nodes, -1).transpose(1, 2).unsqueeze(-1)
+            input_data = self.start_conv(input_data)
 
         data_st = torch.cat([input_data, tem_emb, node_emb], dim=1)
         data_st = F.leaky_relu(self.in_layer(data_st))
+        for block in self.embed_blocks:
+            data_st = data_st + block(data_st)
         data_st = data_st.permute(0, 2, 1, 3).squeeze(-1)
 
         if self.unica_adapter is not None:
@@ -425,6 +539,13 @@ class ST_LLM_TFP(nn.Module):
 
         outputs = outputs.permute(0, 2, 1).unsqueeze(-1)
         outputs = self.regression_layer(outputs)
+        if self.temporal_head is not None:
+            outputs = outputs + self.temporal_head(temporal_flat).transpose(1, 2).unsqueeze(-1)
+        if self.input_skip is not None:
+            # Linear map from the scaled input flows straight to the scaled outputs, shared by all nodes.
+            outputs = outputs + self.input_skip(history_data[:, 0]).transpose(1, 2).unsqueeze(-1)
+        if self.level_prior == "residual":
+            outputs = outputs + covariates["level_prior"].unsqueeze(-1)
 
         if return_aux:
             return outputs, {

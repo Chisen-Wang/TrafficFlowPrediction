@@ -1,0 +1,4 @@
+# Phase 11: seed repeats of p10-u1 (13.8373 at seed 6666). Same-seed rerun noise is ~0.07, so judge on the mean.
+p11-u1-s2 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --U 1 --seed 2
+p11-u1-s3 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --U 1 --seed 3
+p11-u1-s4 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --U 1 --seed 4

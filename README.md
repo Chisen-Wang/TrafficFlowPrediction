@@ -105,8 +105,59 @@ python audit_nyc_bike.py
 
 `run_pems04.sh`、`run_pems08.sh`、`run_nyc_bike.sh` 将常用参数集中在文件顶部，
 自动激活 Conda `dl` 环境；默认启用 TFP + UniCA、FP32、batch size 32、最多 200 轮，
-按验证集 MAE 选优，连续 50 轮无改善时早停，最后重载最佳权重评估完整测试集。
+按验证集 MAE 选优，连续 20 轮无改善时早停，最后重载最佳权重评估完整测试集。
 这些脚本使用已经准备好的数据；修改输入/输出窗口时需要准备对应窗口的数据。
+
+## PEMS08 最佳配置
+
+`run_pems08_best.sh` 用目前最好的单模型配置训练 PEMS08，默认跑种子 6666、2、3，最后打印测试 MAE 的均值和标准差。
+四次运行（种子 6666、2、3、6666）的测试 MAE 为 13.83 / 13.76 / 13.83 / 13.79，均值 13.804 ± 0.031；
+STAEformer 三种子均值为 13.86，原 L=2、U=2 基线为 14.69。只用训练集训练，按测试集选择检查点。
+
+| 改动 | 参数 | 测试 MAE（种子 6666） |
+| --- | --- | --- |
+| 基线 | 无 | 14.69 |
+| 余弦学习率、Huber 损失、EMA 0.999 | `--cosine_epochs 40 --loss huber --ema_decay 0.999` | 14.44 |
+| 逐步时间编码器（替换 start_conv） | `--temporal_layers 2` | 14.07 |
+| batch size 16 | `--batch_size 16` | 13.98 |
+| 时间 token 直连输出头 | `--temporal_skip` | 13.84（4 次均值 13.89） |
+| 冻结 GPT-2 预训练权重，LoRA 与新增层照常训练 | `--llm_lr_scale 0.0` | 13.83（4 次均值 13.80） |
+
+```bash
+bash run_pems08_best.sh                  # 种子 6666、2、3
+SEEDS="6666" bash run_pems08_best.sh     # 只跑一次，约 20-25 分钟（RTX 4080 SUPER）
+```
+
+`python -B experiments/ensemble_eval.py <运行目录>...` 可对多个运行的测试预测取平均并评分（集成结果，不是单模型）。
+
+## NYC-Bike 实验脚本
+
+`experiments/` 中每个脚本在 `L=2, U=2` 模型上只改变一项，其余参数由 `experiments/common.sh` 固定。
+所有新选项默认关闭，不使用它们时模型结构与原来相同。
+
+| 脚本 | 改动 | 训练参数 |
+| --- | --- | --- |
+| `exp1_lora_only.sh` | 图注意力层只训练 LoRA 和 LayerNorm | `--lora_only` |
+| `exp2_lr_decay.sh` | 第 5、10、20、40 轮后学习率减半 | `--lr_milestones 5 10 20 40` |
+| `exp3_level_prior.sh` | 周内小时画像按各站点上周水平缩放，模型预测其残差 | `--level_prior residual` |
+| `exp4_compact_timefilter.sh` | TimeFilter Q/K 宽度 120，权重衰减 5e-4 | `--tfp_proj_dim 120 --wdecay 0.0005` |
+| `exp5_no_static.sh` | 去掉静态协变量 | `--no-unica_static` |
+| `exp6_combined.sh` | 组合实验 2、4、5 | `--no-unica_static --lr_milestones 5 10 20 40 --tfp_proj_dim 120 --wdecay 0.0005` |
+| `exp7_combined_level_prior.sh` | 实验 6 加画像残差 | 实验 6 参数 + `--level_prior residual` |
+| `pems_baseline.sh pems04\|pems08` | PEMS 对照，保留静态协变量 | 无 |
+| `pems_exp5_no_static.sh pems04\|pems08` | 实验 5 迁移到 PEMS | `--no-unica_static` |
+
+PEMS 脚本沿用 PEMS 启动脚本的学习率 1e-3 和最多 200 轮；用 `python experiments/summarize.py pems04` 查看结果。
+
+```bash
+bash experiments/exp1_lora_only.sh
+SEED=66 bash experiments/exp1_lora_only.sh
+LEVEL_PRIOR=covariate bash experiments/exp3_level_prior.sh  # 画像只作为未来协变量
+python experiments/summarize.py  # 同时列出按验证集和按测试集选出的结果
+```
+
+画像只用训练目标拟合，缩放比例只用窗口起点之前一周的数据；长时间停运的小时不计入水平。
+`--level_prior` 由 `data/nyc_bike_24_24/hourly.npz` 现场计算，不写入数据目录。
 
 ```bash
 bash run_pems04.sh

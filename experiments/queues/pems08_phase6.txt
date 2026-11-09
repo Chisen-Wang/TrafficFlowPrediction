@@ -1,0 +1,5 @@
+# Phase 6: temporal encoder at batch 16 (p5-t2-bs16, 13.9847) plus a direct temporal head, longer EMA, longer schedule, another seed.
+p6-b16-tskip | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.999 --temporal_skip
+p6-b16-ema9998 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.9998
+p6-b16-e80 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --cosine_epochs 80 --epochs 80 --es_patience 80 --ema_decay 0.999
+p6-b16-s2 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.999 --seed 2

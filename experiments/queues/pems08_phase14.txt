@@ -1,0 +1,6 @@
+# Phase 14: slow down the 5.5M pretrained GPT-2 weights (of 9.2M trainable) to delay the overfitting after epoch ~19.
+# --llm_lr_scale multiplies the lr of pretrained GPT-2 params (attention, LN, wpe); LoRA adapters and new layers keep lr 1e-3.
+p14-llm01 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.1
+p14-llm03 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.3
+p14-llm0 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.0
+p14-u0 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --U 0

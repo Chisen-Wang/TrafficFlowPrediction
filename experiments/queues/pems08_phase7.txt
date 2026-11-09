@@ -1,0 +1,6 @@
+# Phase 7: seed repeats of p6-b16-tskip (13.8407 at seed 6666), then the EMA 0.9998 variant.
+p7-tskip-s2 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.999 --seed 2
+p7-tskip-s3 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.999 --seed 3
+p7-tskip-ema9998 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.9998
+p7-tskip-ema9998-s2 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.9998 --seed 2
+p7-tskip-ema9998-s3 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --cosine_epochs 40 --epochs 40 --es_patience 40 --ema_decay 0.9998 --seed 3

@@ -178,23 +178,25 @@ class PEMSUniCACovariateAdapter(nn.Module):
             [nn.Linear(1, width) for _ in range(static_dim)]
         )
 
+        # static_dim=0 removes the static path, including its selector conditioning.
+        use_static = static_dim > 0
         self.static_selector = VariableSelectionNetwork(
             d_hidden=width,
-            num_vars=max(static_dim, 1),
+            num_vars=static_dim,
             dropout=dropout,
-        )
-        self.static_context = GatedResidualNetwork(d_hidden=width, dropout=dropout)
+        ) if use_static else None
+        self.static_context = GatedResidualNetwork(d_hidden=width, dropout=dropout) if use_static else None
         self.past_selector = VariableSelectionNetwork(
             d_hidden=width,
             num_vars=1 + past_dynamic_dim,
             dropout=dropout,
-            add_static=True,
+            add_static=use_static,
         )
         self.future_selector = VariableSelectionNetwork(
             d_hidden=width,
             num_vars=max(future_dynamic_dim, 1),
             dropout=dropout,
-            add_static=True,
+            add_static=use_static,
         )
 
         if with_gate:
@@ -231,7 +233,9 @@ class PEMSUniCACovariateAdapter(nn.Module):
         covariates: Dict[str, torch.Tensor],
         batch_size: int,
         device: torch.device,
-    ) -> torch.Tensor:
+    ) -> Optional[torch.Tensor]:
+        if self.static_selector is None:
+            return None
         static_real = covariates.get("static_real")
         if static_real is None:
             static_real = torch.zeros(self.num_nodes, self.static_dim, device=device)
@@ -291,6 +295,14 @@ class PEMSUniCACovariateAdapter(nn.Module):
         else:
             future_mask = self._expand_nodes(future_mask.to(device=device, dtype=torch.float32))
         future_dynamic = future_dynamic * future_mask
+        level_prior = covariates.get("level_prior")
+        if level_prior is not None:
+            level_prior = level_prior.to(device=device, dtype=torch.float32)
+            ratio = covariates["level_ratio"].to(device=device, dtype=torch.float32)
+            ratio = ratio.unsqueeze(1).expand(-1, level_prior.size(1), -1)
+            level = torch.stack([level_prior, ratio], dim=-1)
+            future_dynamic = torch.cat([future_dynamic, level], dim=-1)
+            future_mask = torch.cat([future_mask, torch.ones_like(level)], dim=-1)
 
         tokens = []
         masks = []

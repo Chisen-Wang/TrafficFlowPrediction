@@ -88,17 +88,22 @@ class TimeFilterAttentionBias(nn.Module):
         static_weight: float = 1.0,
         dynamic_weight: float = 1.0,
         input_norm: bool = True,
+        proj_dim: Optional[int] = None,
     ):
         super().__init__()
         if hidden_dim % num_heads != 0:
             raise ValueError("hidden_dim must be divisible by num_heads")
         if not 0.0 <= alpha < 1.0:
             raise ValueError("alpha must be in [0, 1)")
+        # None keeps the full-width Q/K layout of existing checkpoints.
+        proj_dim = hidden_dim if proj_dim is None else proj_dim
+        if proj_dim < num_heads or proj_dim % num_heads != 0:
+            raise ValueError("proj_dim must be a positive multiple of num_heads")
 
         self.hidden_dim = hidden_dim
         self.num_heads = num_heads
         self.num_nodes = num_nodes
-        self.head_dim = hidden_dim // num_heads
+        self.head_dim = proj_dim // num_heads
         self.alpha = alpha
         self.static_weight = static_weight
         self.dynamic_weight = dynamic_weight
@@ -110,8 +115,8 @@ class TimeFilterAttentionBias(nn.Module):
         self.input_norm = (nn.LayerNorm(hidden_dim, elementwise_affine=False)
                            if input_norm else nn.Identity())
 
-        self.proj_q = nn.Linear(hidden_dim, hidden_dim)
-        self.proj_k = nn.Linear(hidden_dim, hidden_dim)
+        self.proj_q = nn.Linear(hidden_dim, proj_dim)
+        self.proj_k = nn.Linear(hidden_dim, proj_dim)
         self.router = TimeFilterMoERouter(num_nodes=num_nodes, top_p=top_p)
 
         self.last_bias_shape: Optional[Tuple[int, ...]] = None

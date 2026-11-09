@@ -1,0 +1,6 @@
+# Phase 12: distillation from a 12-run train-only ensemble (test 13.6372) into the best single-model setup.
+# Training target = (1 - alpha) * truth + alpha * teacher prediction on the training windows.
+p12-kd05 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --distill_targets logs/distill/teacher12_train.npy --distill_alpha 0.5
+p12-kd10 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --distill_targets logs/distill/teacher12_train.npy --distill_alpha 1.0
+p12-kd05-s2 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --distill_targets logs/distill/teacher12_train.npy --distill_alpha 0.5 --seed 2
+p12-kd05-s3 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --distill_targets logs/distill/teacher12_train.npy --distill_alpha 0.5 --seed 3

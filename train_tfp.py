@@ -41,13 +41,48 @@ def parse_args(argv=None):
     parser.add_argument("--llm_layer", type=int, default=2)
     parser.add_argument("--U", type=int, default=2)
     parser.add_argument("--wdecay", type=float, default=0.0001)
+    parser.add_argument("--lr_milestones", type=int, nargs="*", default=[],
+                        help="Epochs after which the learning rate is multiplied by --lr_gamma; empty keeps it constant")
+    parser.add_argument("--lr_gamma", type=float, default=0.5)
+    parser.add_argument("--cosine_epochs", type=int, default=0,
+                        help="Cosine-anneal the learning rate to --min_lr over this many epochs, then hold; 0 disables")
+    parser.add_argument("--warmup_epochs", type=int, default=0,
+                        help="Linear warm-up epochs before the cosine schedule")
+    parser.add_argument("--min_lr", type=float, default=1e-5)
+    parser.add_argument("--loss", choices=("mae", "huber"), default="mae",
+                        help="Training loss on the original flow scale; evaluation always reports MAE")
+    parser.add_argument("--huber_delta", type=float, default=1.0)
+    parser.add_argument("--llm_lr_scale", type=float, default=1.0,
+                        help="learning-rate multiplier for the trainable GPT-2 parameters")
+    parser.add_argument("--input_noise", type=float, default=0.0,
+                        help="std of Gaussian noise added to the normalized input flow during training")
+    parser.add_argument("--input_drop", type=float, default=0.0,
+                        help="fraction of input flow readings replaced by the missing value during training")
+    parser.add_argument("--ema_decay", type=float, default=0.0,
+                        help="Keep an exponential moving average of trainable weights and evaluate/save it; 0 disables")
+    parser.add_argument("--dropout", type=float, default=0.1,
+                        help="Model dropout (embedding output, LoRA, final hidden state, MLP head)")
+    parser.add_argument("--head_hidden", type=int, default=0,
+                        help="Width of a two-layer prediction head; 0 keeps the original linear head")
+    parser.add_argument("--input_skip", action="store_true",
+                        help="Add a zero-initialized linear shortcut from the input flows to the outputs")
+    parser.add_argument("--embed_layers", type=int, default=0,
+                        help="Residual MLP blocks applied to node tokens before GPT-2; 0 keeps the original embedding")
+    parser.add_argument("--temporal_layers", type=int, default=-1,
+                        help="Per-step temporal transformer layers before GPT-2; -1 keeps the original flattening conv")
+    parser.add_argument("--temporal_skip", action="store_true",
+                        help="Add a zero-initialized linear output head on the temporal encoder tokens")
+    parser.add_argument("--distill_targets", type=str, default=None,
+                        help="npy of teacher flow predictions on the training windows in file order, [samples, horizon, nodes]")
+    parser.add_argument("--distill_alpha", type=float, default=0.5,
+                        help="Training target = (1 - alpha) * truth + alpha * teacher; missing (zero) truths stay zero")
     parser.add_argument("--clip", type=float, default=5.0)
     parser.add_argument("--seed", type=int, default=6666)
     parser.add_argument("--train_fraction", type=float, default=1.0)
     parser.add_argument("--subset_seed", type=int, default=6666)
     parser.add_argument("--shuffle_train", action="store_true", help="Shuffle training windows together with targets and covariates each epoch")
     parser.add_argument("--print_every", type=int, default=50)
-    parser.add_argument("--es_patience", type=int, default=100)
+    parser.add_argument("--es_patience", type=int, default=20)
     parser.add_argument("--model_selection_split", choices=("train", "val", "test"), default="val",
                         help="Split whose evaluation-mode MAE selects checkpoints and controls early stopping")
     parser.add_argument("--save", type=str, default=str(DEFAULT_SAVE_PREFIX))
@@ -62,8 +97,17 @@ def parse_args(argv=None):
     parser.add_argument("--tfp_moe_loss_weight", type=float, default=0.05)
     parser.add_argument("--tfp_input_norm", action=argparse.BooleanOptionalAction, default=True,
                         help="Layer-normalize node tokens before TimeFilter similarity projection")
+    parser.add_argument("--tfp_proj_dim", type=int, default=None,
+                        help="TimeFilter Q/K width, a multiple of the 12 GPT-2 heads; default keeps the full 768")
+    parser.add_argument("--lora_only", action="store_true",
+                        help="Freeze base attention weights in graph layers so only LoRA and LayerNorm train there")
 
     parser.add_argument("--unica_enabled", action="store_true")
+    parser.add_argument("--unica_static", action=argparse.BooleanOptionalAction, default=True,
+                        help="Use static covariates in the UniCA adapter")
+    parser.add_argument("--level_prior", choices=("none", "covariate", "residual"), default="none",
+                        help="NYC-Bike only. covariate adds the rescaled weekly profile and level ratio as future "
+                             "covariates; residual also predicts the error of that profile")
     parser.add_argument("--unica_covariates", type=str, default=None)
     parser.add_argument("--unica_with_gate", action="store_true")
     parser.add_argument("--unica_with_future", action=argparse.BooleanOptionalAction, default=True)
@@ -123,6 +167,18 @@ def parse_args(argv=None):
                               or args.unica_heads < 1
                               or args.unica_bottleneck_dim % args.unica_heads):
         parser.error("--unica_bottleneck_dim must be in [1, 768] and divisible by positive --unica_heads")
+    if args.tfp_proj_dim is not None and (args.tfp_proj_dim <= 0 or args.tfp_proj_dim % 12):
+        parser.error("--tfp_proj_dim must be a positive multiple of 12")
+    if args.lr_milestones and (min(args.lr_milestones) <= 0 or not 0 < args.lr_gamma <= 1):
+        parser.error("--lr_milestones must be positive and --lr_gamma in (0, 1]")
+    if args.cosine_epochs and args.lr_milestones:
+        parser.error("--cosine_epochs and --lr_milestones are mutually exclusive")
+    if args.cosine_epochs < 0 or args.warmup_epochs < 0 or (args.warmup_epochs and not args.cosine_epochs):
+        parser.error("--warmup_epochs needs a positive --cosine_epochs")
+    if not 0.0 <= args.ema_decay < 1.0:
+        parser.error("--ema_decay must be in [0, 1)")
+    if args.level_prior != "none" and not (nyc and args.unica_enabled and args.unica_with_future):
+        parser.error("--level_prior needs --data nyc_bike, --unica_enabled and --unica_with_future")
     return args
 
 
@@ -152,6 +208,7 @@ class Trainer:
             "static_weight": args.tfp_static_weight,
             "dynamic_weight": args.tfp_dynamic_weight,
             "input_norm": args.tfp_input_norm,
+            "proj_dim": args.tfp_proj_dim,
         }
         unica_config = {
             "past_pos": args.unica_past_pos,
@@ -162,7 +219,7 @@ class Trainer:
             "dropout": args.unica_dropout,
             "past_dynamic_dim": args.unica_past_dynamic_dim,
             "future_dynamic_dim": args.unica_future_dynamic_dim,
-            "static_dim": args.unica_static_dim,
+            "static_dim": args.unica_static_dim if args.unica_static else 0,
             "bottleneck_dim": args.unica_bottleneck_dim,
         }
         self.model = ST_LLM_TFP(
@@ -179,6 +236,14 @@ class Trainer:
             tfp_config=tfp_config,
             unica_enabled=args.unica_enabled,
             unica_config=unica_config,
+            lora_only=args.lora_only,
+            level_prior=args.level_prior,
+            dropout=args.dropout,
+            head_hidden=args.head_hidden,
+            input_skip=args.input_skip,
+            embed_layers=args.embed_layers,
+            temporal_layers=args.temporal_layers,
+            temporal_skip=args.temporal_skip,
         ).to(device)
 
         if args.unica_enabled and args.unica_training_policy == "adapter_only":
@@ -220,7 +285,39 @@ class Trainer:
         trainable_params = [p for p in self.model.parameters() if p.requires_grad]
         if not trainable_params:
             raise ValueError("No trainable parameters found.")
+        if args.llm_lr_scale != 1.0:
+            # Pretrained GPT-2 weights (attention, layer norms, position embeddings) learn at a scaled rate;
+            # the newly initialized LoRA adapters keep the base rate.
+            llm = [p for n, p in self.model.named_parameters()
+                   if p.requires_grad and n.startswith("gpt.gpt2.") and "lora_" not in n]
+            llm_ids = {id(p) for p in llm}
+            rest = [p for p in trainable_params if id(p) not in llm_ids]
+            print(f"LLM params at lr x{args.llm_lr_scale}: {sum(p.numel() for p in llm)}; others: {sum(p.numel() for p in rest)}")
+            trainable_params = [dict(params=rest), dict(params=llm, lr=args.lrate * args.llm_lr_scale)]
         self.optimizer = Ranger(trainable_params, lr=args.lrate, weight_decay=args.wdecay)
+        self.lr_scheduler = (torch.optim.lr_scheduler.MultiStepLR(
+            self.optimizer, milestones=args.lr_milestones, gamma=args.lr_gamma) if args.lr_milestones else None)
+        if args.cosine_epochs:
+            warmup, total, floor = args.warmup_epochs, args.cosine_epochs, args.min_lr / args.lrate
+
+            def lr_factor(epoch):  # epoch = number of finished epochs
+                if epoch < warmup:
+                    return (epoch + 1) / (warmup + 1)
+                progress = min(1.0, (epoch - warmup) / max(1, total - warmup))
+                return floor + (1 - floor) * 0.5 * (1 + np.cos(np.pi * progress))
+
+            self.lr_scheduler = torch.optim.lr_scheduler.LambdaLR(self.optimizer, lr_factor)
+        self.loss_name = args.loss
+        self.huber_delta = args.huber_delta
+        self.input_noise = args.input_noise
+        self.input_drop = args.input_drop
+        self.ema_decay = args.ema_decay
+        self.ema_params = None
+        self._backup = None
+        if self.ema_decay > 0:
+            self.ema_named = [(n, p) for n, p in self.model.named_parameters() if p.requires_grad]
+            self.ema_params = [p.detach().clone() for _, p in self.ema_named]
+            self.ema_steps = 0
         self.scaler = scaler
         self.clip = args.clip
         self.count_targets = args.data == "nyc_bike"
@@ -233,6 +330,16 @@ class Trainer:
     def train(self, input_data, real_val, covariates=None):
         self.model.train()
         self.optimizer.zero_grad()
+        if self.input_noise > 0 or self.input_drop > 0:
+            # Training-only augmentation of the normalized flow channel ([B, C, N, T], channel 0).
+            input_data = input_data.clone()
+            flow = input_data[:, 0]
+            if self.input_noise > 0:
+                flow.add_(self.input_noise * torch.randn_like(flow))
+            if self.input_drop > 0:
+                # A dropped reading looks like a missing sensor value (raw 0 after normalization).
+                missing = float(self.scaler.transform(0.0))
+                flow.masked_fill_(torch.rand_like(flow) < self.input_drop, missing)
 
         output, aux = self.model(
             input_data,
@@ -245,11 +352,21 @@ class Trainer:
         predict = self.scaler.inverse_transform(output)
         mae_loss = metrics.MAE_torch(predict, real, None if self.count_targets else 0.0)
         moe_loss = aux["moe_loss"]
-        objective = mae_loss + self.moe_loss_weight * moe_loss
+        if self.loss_name == "huber":
+            if self.count_targets:
+                fit_loss = torch.nn.functional.huber_loss(predict, real, delta=self.huber_delta)
+            else:
+                mask = real > 0.0
+                fit_loss = torch.nn.functional.huber_loss(
+                    torch.masked_select(predict, mask), torch.masked_select(real, mask), delta=self.huber_delta)
+        else:
+            fit_loss = mae_loss
+        objective = fit_loss + self.moe_loss_weight * moe_loss
         objective.backward()
         if self.clip is not None and self.clip > 0:
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.clip)
         self.optimizer.step()
+        self.update_ema()
 
         if self.count_targets:
             stats = metrics.count_statistics(predict, real)
@@ -263,6 +380,32 @@ class Trainer:
             "rmse": metrics.RMSE_torch(predict, real, 0.0).item(),
             "wmape": metrics.WMAPE_torch(predict, real, 0.0).item(),
         }
+
+    @torch.no_grad()
+    def update_ema(self):
+        if self.ema_params is None:
+            return
+        self.ema_steps += 1
+        # Short warm-up so early epochs are not dominated by the random initialization.
+        decay = min(self.ema_decay, (1 + self.ema_steps) / (10 + self.ema_steps))
+        torch._foreach_lerp_(self.ema_params, [p.detach() for _, p in self.ema_named], 1 - decay)
+
+    @torch.no_grad()
+    def swap_in_ema(self):
+        """Load EMA weights into the model (keeping the live weights) until swap_out_ema()."""
+        if self.ema_params is None or self._backup is not None:
+            return
+        self._backup = [p.detach().clone() for _, p in self.ema_named]
+        for (_, p), e in zip(self.ema_named, self.ema_params):
+            p.copy_(e)
+
+    @torch.no_grad()
+    def swap_out_ema(self):
+        if self._backup is None:
+            return
+        for (_, p), b in zip(self.ema_named, self._backup):
+            p.copy_(b)
+        self._backup = None
 
     def eval(self, input_data, real_val, covariates=None):
         self.model.eval()
@@ -408,6 +551,17 @@ def main():
     if args.unica_covariates is not None:
         covariates_dir = resolve_data_dir(SCRIPT_DIR, args.unica_covariates)
 
+    train_flow_targets = None
+    if args.distill_targets:
+        if not 0.0 < args.distill_alpha <= 1.0:
+            raise ValueError("--distill_alpha must be in (0, 1]")
+        with np.load(data_dir / "train.npz") as raw:
+            truth = raw["y"][..., 0]
+        teacher = np.load(os.path.expanduser(args.distill_targets)).astype(truth.dtype)
+        if teacher.shape != truth.shape:
+            raise ValueError(f"--distill_targets shape {teacher.shape} != training targets {truth.shape}")
+        train_flow_targets = np.where(truth > 0, (1 - args.distill_alpha) * truth + args.distill_alpha * teacher, truth)
+
     dataloader = load_dataset(
         data_dir,
         args.batch_size,
@@ -417,6 +571,8 @@ def main():
         covariates_dir=covariates_dir,
         train_fraction=args.train_fraction,
         subset_seed=args.subset_seed,
+        level_prior=args.level_prior != "none",
+        train_flow_targets=train_flow_targets,
         expected={"dataset": args.data, "num_nodes": args.num_nodes,
                   "input_dim": args.input_dim, "input_len": args.input_len,
                   "output_len": args.output_len, "steps_per_day": args.steps_per_day,
@@ -467,6 +623,7 @@ def main():
         )
         t2 = time.time()
         train_time.append(t2 - t1)
+        engine.swap_in_ema()  # evaluate and save the averaged weights when --ema_decay is set
 
         s1 = time.time()
         valid_metrics = run_loader(
@@ -491,7 +648,10 @@ def main():
             "valid_rmse": valid_metrics["rmse"],
             "valid_mape": valid_metrics["mape"],
             "valid_wmape": valid_metrics["wmape"],
+            "lr": engine.optimizer.param_groups[0]["lr"],
         }
+        if engine.lr_scheduler is not None:
+            engine.lr_scheduler.step()
         if args.model_selection_split == "train":
             training_evaluation = run_loader(
                 engine, dataloader["train_loader"], device, max_batches=args.max_eval_batches)
@@ -547,6 +707,7 @@ def main():
         else:
             epochs_since_best += 1
             print("No update")
+        engine.swap_out_ema()
 
         if epochs_since_best >= args.es_patience:
             print(f"Early stopping after {epochs_since_best} epochs without {args.model_selection_split} improvement.")

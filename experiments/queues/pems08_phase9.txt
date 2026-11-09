@@ -1,0 +1,5 @@
+# Phase 9: seed-6666 screens around p6-b16-tskip (13.8407; 3-seed mean 13.884). es_patience 8 only shortens runs (all peak near epoch 19).
+p9-b8 | --shuffle_train --warmup_epochs 3 --loss huber --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 8 --lrate 0.001
+p9-t3 | --shuffle_train --warmup_epochs 3 --loss huber --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --lrate 0.001 --temporal_layers 3
+p9-drop2 | --shuffle_train --warmup_epochs 3 --loss huber --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --lrate 0.001 --dropout 0.2
+p9-lr5e4 | --shuffle_train --warmup_epochs 3 --loss huber --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --lrate 0.0005

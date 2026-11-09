@@ -1,0 +1,5 @@
+# Phase 4: STAEformer-style per-step temporal encoder replacing the flattening start_conv.
+p4-temp2 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 2
+p4-temp0 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 0
+p4-temp3 | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --temporal_layers 3
+p4-temp2-e80 | --shuffle_train --lrate 0.001 --cosine_epochs 80 --warmup_epochs 3 --epochs 80 --es_patience 80 --loss huber --ema_decay 0.999 --temporal_layers 2

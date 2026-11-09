@@ -8,7 +8,7 @@ EPOCHS="${EPOCHS:-300}"
 LRATE="${LRATE:-0.0003}"
 DEVICE="${DEVICE:-cuda:0}"
 SEED="${SEED:-6666}"
-ES_PATIENCE="${ES_PATIENCE:-100}"
+ES_PATIENCE="${ES_PATIENCE:-20}"
 WDECAY="${WDECAY:-0.0001}"
 CLIP="${CLIP:-5.0}"
 
@@ -34,7 +34,7 @@ SAVE_PREFIX="${SAVE_PREFIX:-}"       # 留空自动生成；最终目录会追�
 EXTRA_ARGS=(
   # --tfp_alpha 0.1
   # --tfp_top_p 0.5
-  # --tfp_moe_loss_weight 0.03 \
+  # --tfp_moe_loss_weight 0.03
   --model_selection_split test
 )
 

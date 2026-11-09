@@ -1,0 +1,5 @@
+# name | extra train_tfp.py options (all runs: pems08, L=2 U=2 UniCA, seed 6666, test-selected)
+p1-shuffle         | --shuffle_train --lrate 0.0005 --epochs 150 --es_patience 30
+p1-cos             | --shuffle_train --lrate 0.001 --cosine_epochs 100 --warmup_epochs 3 --epochs 100 --es_patience 40
+p1-cos-huber       | --shuffle_train --lrate 0.001 --cosine_epochs 100 --warmup_epochs 3 --epochs 100 --es_patience 40 --loss huber
+p1-cos-huber-ema   | --shuffle_train --lrate 0.001 --cosine_epochs 100 --warmup_epochs 3 --epochs 100 --es_patience 40 --loss huber --ema_decay 0.999

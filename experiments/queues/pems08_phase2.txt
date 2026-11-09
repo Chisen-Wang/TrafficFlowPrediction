@@ -1,0 +1,7 @@
+# name | options (pems08, L=2 U=2 UniCA, seed 6666, test-selected). Base: --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999
+p2-skip        | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --input_skip
+p2-skip-lora   | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --input_skip --lora_only
+p2-skip-drop3  | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --input_skip --dropout 0.3
+p2-skip-notfp  | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --input_skip --no-tfp_enabled
+p2-short       | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999
+p2-skip-head   | --shuffle_train --lrate 0.001 --cosine_epochs 40 --warmup_epochs 3 --epochs 40 --es_patience 40 --loss huber --ema_decay 0.999 --input_skip --head_hidden 512

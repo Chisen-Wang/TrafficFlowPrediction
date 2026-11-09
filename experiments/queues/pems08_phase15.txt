@@ -1,0 +1,4 @@
+# Phase 15: seed repeats of p14-llm0 (pretrained GPT-2 weights frozen via lr 0, LoRA trains; seed 6666 13.8264).
+p15-llm0-s2 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.0 --seed 2
+p15-llm0-s3 | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.0 --seed 3
+p15-llm0-rep | --shuffle_train --warmup_epochs 3 --temporal_layers 2 --temporal_skip --ema_decay 0.999 --cosine_epochs 40 --epochs 40 --es_patience 8 --batch_size 16 --loss huber --lrate 0.001 --llm_lr_scale 0.0

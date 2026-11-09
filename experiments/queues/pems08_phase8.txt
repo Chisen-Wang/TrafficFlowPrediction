@@ -1,0 +1,4 @@
+# Phase 8: tskip at batch 16 with a 25-epoch cosine schedule (40-epoch runs all peaked at epoch 19), seeds 6666/2/3.
+p8-c25 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --ema_decay 0.999 --cosine_epochs 25 --epochs 25 --es_patience 25
+p8-c25-s2 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --ema_decay 0.999 --cosine_epochs 25 --epochs 25 --es_patience 25 --seed 2
+p8-c25-s3 | --shuffle_train --lrate 0.001 --warmup_epochs 3 --loss huber --temporal_layers 2 --batch_size 16 --temporal_skip --ema_decay 0.999 --cosine_epochs 25 --epochs 25 --es_patience 25 --seed 3

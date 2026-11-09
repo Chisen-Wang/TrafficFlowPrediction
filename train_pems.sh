@@ -25,6 +25,6 @@ data_args=()
 if [[ "$dataset" == pems04 ]]; then data_args=(--data_dir data/pems04_12_12); fi
 exec python -B train_tfp.py --data "$dataset" "${data_args[@]}" \
   --input_len 12 --output_len 12 --batch_size "$batch_size" \
-  --llm_layer 2 --U 2 --epochs 200 --es_patience 50 \
+  --llm_layer 2 --U 2 --epochs 200 --es_patience 20 \
   --save "./logs/$(date +%Y-%m-%d-%H-%M-%S)-${mode}-" \
   "${mode_args[@]}" "$@"

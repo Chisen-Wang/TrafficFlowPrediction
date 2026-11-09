@@ -7,6 +7,8 @@ from typing import Dict, Optional
 import numpy as np
 import torch
 
+from utils.level_prior import build_level_prior
+
 
 STATIC_COVARIATE_KEYS = {"static_real", "static_observed_mask"}
 
@@ -141,6 +143,8 @@ def load_dataset(
     expected=None,
     train_fraction=1.0,
     subset_seed=6666,
+    level_prior=False,
+    train_flow_targets=None,
 ):
     if not 0 < train_fraction <= 1:
         raise ValueError("train_fraction must be in (0, 1]")
@@ -161,6 +165,12 @@ def load_dataset(
     data["metadata"] = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
     pad_samples = data["metadata"].get("dataset") != "nyc_bike"
     data["covariate_dims"] = validate_dataset(data, covariates, expected, dataset_dir)
+    if train_flow_targets is not None:
+        # Distillation: replace the training flow targets (raw units, [samples, horizon, nodes]) before any shuffling.
+        if train_flow_targets.shape != data["y_train"][..., 0].shape:
+            raise ValueError(f"train_flow_targets shape {train_flow_targets.shape} != {data['y_train'][..., 0].shape}")
+        data["y_train"] = data["y_train"].copy()
+        data["y_train"][..., 0] = train_flow_targets
     full_train_samples = len(data["x_train"])
     train_indices = np.arange(full_train_samples)
     if train_fraction < 1:
@@ -184,6 +194,15 @@ def load_dataset(
         scaler.std = 1.0
     for category in ["train", "val", "test"]:
         data[f"x_{category}"][..., 0] = scaler.transform(data[f"x_{category}"][..., 0])
+
+    if level_prior:
+        if covariates is None:
+            raise ValueError("level_prior needs covariates to be loaded")
+        priors = build_level_prior(dataset_dir, data["y_train"].shape[1])
+        for category in ["train", "val", "test"]:
+            # The prior shares the flow scale, so a residual model can add it to raw outputs.
+            covariates[category]["level_prior"] = scaler.transform(priors[category]["prior"])
+            covariates[category]["level_ratio"] = priors[category]["ratio"] - 1
 
     random_train = np.random.permutation(int(data["x_train"].shape[0]))
     data["x_train"] = data["x_train"][random_train, ...]
